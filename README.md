@@ -344,6 +344,32 @@ Expected output:
   "alert_needed": true
 }
 ```
+### if you faced any issue with installation of python 
+```json
+#Go with Homebrew: 
+brew install python
+
+Or download from python.org
+
+#Install the groq package with the correct pip
+pip3 install groq
+
+#Set the API key (again, if needed)
+export GROQ_API_KEY="your_groq_key_here"
+
+#Run the script again
+python3 ai_analyzer/analyzer.py
+```
+
+### facing issue with LLM model  
+
+
+model="llama-3.1-8b-instant",   # change the model to this
+
+```json
+export GROQ_API_KEY="your_groq_key_here"
+python3 ai_analyzer/analyzer.py
+```
 
 ### Step 2.4 — Add AI Endpoint to FastAPI
 
