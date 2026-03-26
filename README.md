@@ -401,12 +401,12 @@ def analyze():
 
 ```bash
 minikube start --driver=docker
-
+```
+```
 # Verify it's running
 minikube status
 kubectl get nodes
 ```
-
 Expected output:
 ```
 minikube
@@ -436,7 +436,14 @@ minikube image ls | grep smart-log-app
 
 ```bash
 kubectl create secret generic groq-secret \
-  --from-literal=api-key=YOUR_GROQ_API_KEY
+  --from-literal=api-key=YOUR_GROQ_API_KEY        # you need keep your apikey here
+
+```
+if you face with the secret key creation 
+```
+kubectl delete secret groq-secret
+kubectl create secret generic groq-secret --from-literal=api-key=type_YOUR_NEW_API_KEY  
+```
 
 # Verify it was created
 kubectl get secrets
@@ -472,6 +479,15 @@ spec:
             secretKeyRef:
               name: groq-secret
               key: api-key
+        - name: GROQ_MODEL
+          value: "llama-3.1-8b-instant"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
 ---
 apiVersion: v1
 kind: Service
@@ -543,6 +559,44 @@ minikube dashboard
 # Roll back if something breaks
 kubectl rollout undo deployment/log-app
 ```
+### If you face any issues
+```
+dont stop the process that is going on the terminal
+open new terminal and do this on it!!!
+Automatically you will see the browser will be open and you can the K8's cluster, pods and everything
+```
+
+### Step-by-step fix
+## 1. Verify your FastAPI code has the /analyze endpoint
+Look at your local app.py (or whichever file you copied into the image). It should contain:
+```
+python
+@app.get("/analyze")
+def analyze():
+    # ... your logic
+```
+If it’s missing, add it and save.
+
+### 2. Connect to Minikube’s Docker daemon
+You must build the image inside Minikube’s Docker, so Kubernetes can pull it without a registry.
+
+```
+eval $(minikube docker-env)
+```
+Verify it worked:
+
+```
+docker info | grep "Server Version"
+```
+You should see a version that matches Minikube’s Docker.
+
+### 3. Build the new image with the updated code
+```
+docker build -t smart-log-app:v2 .
+```
+(If you get permission errors, try sudo or ensure your user is in the docker group.)
+
+
 
 ---
 
@@ -636,6 +690,7 @@ terraform show
 
 # When done, clean up
 terraform destroy
+# Type 'yes' what to destory
 ```
 
 ---
@@ -856,6 +911,92 @@ kubectl apply -f k8s/deployment.yaml
 
 ---
 
+Your pods are stuck in `ErrImageNeverPull` because the image `smart-log-app:v1` is not present in Minikube's Docker daemon. You already ran `eval $(minikube docker-env)` and then `docker images` showed no matching image, confirming it’s missing.
+
+Part 1: Fix the ErrImageNeverPull (Minikube Side)
+Before moving to Jenkins, let's get your actual application running.
+
+1. Point Terminal to Minikube
+This ensures your docker build command sends the image directly into Minikube’s internal registry.
+
+```
+eval $(minikube docker-env)
+```
+2. Build the Image inside Minikube
+Run this from your project root (where the Dockerfile is):
+
+```
+docker build -t smart-log-app:v1 .
+```
+3. Verify and Restart
+Confirm the image is visible to Minikube, then force Kubernetes to try pulling it again.
+
+```
+# Verify image presence
+docker images | grep smart-log-app
+
+# Force a restart of the pods
+kubectl rollout restart deployment/log-app
+
+# Watch them turn green (Running)
+kubectl get pods -w
+```
+Part 2: Setup Jenkins (Host Side)
+
+Now that the app is healthy, let’s get your CI/CD server running on your host machine.
+1. Reset Environment for Host Docker
+Crucial: You must disconnect from Minikube’s Docker env so Jenkins runs on your Mac/PC, not inside the cluster.
+
+```
+eval $(minikube docker-env -u)
+```
+2. Launch Jenkins
+We mount the Docker socket so Jenkins can build images for you later.
+```
+docker rm -f jenkins 2>/dev/null
+docker run -d \
+  -p 9090:8080 \
+  -p 50000:50000 \
+  -v jenkins_home:/var/jenkins_home \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  --name jenkins \
+  jenkins/jenkins:lts
+```
+3. Get the Unlock Key
+
+sleep 30
+```
+docker logs jenkins 2>&1 | grep -A 2 "Please use the following password"
+```
+Action: Go to http://localhost:9090 and paste the code found in the logs.
+
+Part 3: Secrets & Testing
+
+1. Inject the API Key
+If your app uses Groq for AI analysis, the pod needs the secret to exist in the cluster.
+
+```
+kubectl create secret generic groq-secret \
+  --from-literal=api-key=YOUR_ACTUAL_GROQ_KEY \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+2. Test the API
+Bridge the Minikube network to your localhost:
+```
+kubectl port-forward service/log-app-service 8080:80 &
+curl http://localhost:8080/analyze
+```
+
+Troubleshooting Table
+Symptom	Cause	Quick Fix
+ErrImageNeverPull	Image built on Host, not Minikube.	Run eval $(minikube docker-env) then rebuild.
+Jenkins Offline	Docker Desktop daemon stopped.	Restart Docker Desktop and check docker ps.
+Connection Refused	Port-forwarding died.	Re-run the kubectl port-forward command.
+Pod Crash (Auth)	Missing groq-secret.	Check kubectl get secrets.
+
+
+
+---
 ## 📁 Project Structure
 
 ```
